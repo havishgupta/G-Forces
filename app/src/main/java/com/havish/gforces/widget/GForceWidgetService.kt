@@ -47,9 +47,9 @@ class GForceWidgetService : Service() {
 
             // Launch sensor collection in background
             launch {
-                sensorManagerWrapper.getGravityData().collectLatest { data ->
-                    currentX = data.x
-                    currentY = data.y
+                sensorManagerWrapper.getGForceData().collectLatest { data ->
+                    currentX = data.lateralG
+                    currentY = data.longitudinalG
                 }
             }
 

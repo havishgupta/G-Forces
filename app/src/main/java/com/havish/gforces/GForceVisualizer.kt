@@ -1,12 +1,20 @@
 package com.havish.gforces
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -25,71 +33,94 @@ fun GForceVisualizer(
     maxG: Float = 1.5f,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .padding(16.dp)
-            .aspectRatio(1f),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val center = Offset(size.width / 2, size.height / 2)
-            val radius = size.width / 2
+    // Animate the dot for smoothness
+    val animatedX by animateFloatAsState(
+        targetValue = xGs,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "xGs"
+    )
+    val animatedY by animateFloatAsState(
+        targetValue = yGs,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "yGs"
+    )
 
-            // Draw concentric rings (e.g., 0.5G, 1.0G, 1.5G)
-            val ringCount = 3
-            for (i in 1..ringCount) {
-                val ringRadius = radius * (i / ringCount.toFloat())
-                drawCircle(
-                    color = Color.DarkGray,
-                    radius = ringRadius,
-                    center = center,
-                    style = Stroke(
-                        width = 2.dp.toPx(),
-                        pathEffect = if (i < ringCount) PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) else null
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .background(Color(0xFF1E1E1E), shape = RoundedCornerShape(100)),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                val center = Offset(size.width / 2, size.height / 2)
+                val radius = size.width / 2
+
+                // Draw concentric rings
+                val rings = listOf(maxG * 0.33f, maxG * 0.66f, maxG)
+                
+                rings.forEachIndexed { index, gValue ->
+                    val ringRadius = radius * (gValue / maxG)
+                    drawCircle(
+                        color = Color.DarkGray.copy(alpha = 0.7f),
+                        radius = ringRadius,
+                        center = center,
+                        style = Stroke(
+                            width = if (index == rings.lastIndex) 3.dp.toPx() else 1.dp.toPx(),
+                            pathEffect = if (index < rings.lastIndex) PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f) else null
+                        )
                     )
+                }
+
+                // Crosshairs
+                drawLine(
+                    color = Color.DarkGray,
+                    start = Offset(center.x, 0f),
+                    end = Offset(center.x, size.height),
+                    strokeWidth = 1.dp.toPx()
+                )
+                drawLine(
+                    color = Color.DarkGray,
+                    start = Offset(0f, center.y),
+                    end = Offset(size.width, center.y),
+                    strokeWidth = 1.dp.toPx()
+                )
+
+                // Calculate dot position
+                val normalizedX = (animatedX / maxG).coerceIn(-1f, 1f)
+                val normalizedY = (animatedY / maxG).coerceIn(-1f, 1f)
+                
+                val dotX = center.x + (normalizedX * radius)
+                val dotY = center.y - (normalizedY * radius) // -Y so forward accel goes UP
+
+                // Draw Dot Halo
+                drawCircle(
+                    color = Color.Red.copy(alpha = 0.3f),
+                    radius = 18.dp.toPx(),
+                    center = Offset(dotX, dotY)
+                )
+
+                // Draw Dot
+                drawCircle(
+                    color = Color.Red,
+                    radius = 12.dp.toPx(),
+                    center = Offset(dotX, dotY)
                 )
             }
-
-            // Crosshairs
-            drawLine(
-                color = Color.DarkGray,
-                start = Offset(center.x, 0f),
-                end = Offset(center.x, size.height),
-                strokeWidth = 1.dp.toPx()
-            )
-            drawLine(
-                color = Color.DarkGray,
-                start = Offset(0f, center.y),
-                end = Offset(size.width, center.y),
-                strokeWidth = 1.dp.toPx()
-            )
-
-            // Calculate dot position
-            val normalizedX = (xGs / maxG).coerceIn(-1f, 1f)
-            val normalizedY = (yGs / maxG).coerceIn(-1f, 1f)
-            
-            // Invert Y so positive G (braking/forward tilt) goes UP in the circle if preferred, 
-            // but standard Android Y is positive downwards. Let's invert Y for a car dashboard feel 
-            // where acceleration (backward tilt) makes the dot go down, braking makes it go up.
-            val dotX = center.x + (normalizedX * radius)
-            val dotY = center.y - (normalizedY * radius)
-
-            // Draw Dot
-            drawCircle(
-                color = Color.Red,
-                radius = 12.dp.toPx(),
-                center = Offset(dotX, dotY)
-            )
         }
 
         // Display current Gs
-        val totalG = sqrt(xGs * xGs + yGs * yGs)
+        val totalG = sqrt(animatedX * animatedX + animatedY * animatedY)
         Text(
             text = String.format("%.2f G", totalG),
             color = Color.White,
-            fontSize = 24.sp,
+            fontSize = 32.sp,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier.padding(top = 24.dp)
         )
     }
 }
