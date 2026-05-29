@@ -54,10 +54,10 @@ class SensorManagerWrapper(context: Context) {
                     lpGravityZ = alpha * lpGravityZ + (1 - alpha) * accelZ
 
                     if (!isTrueGMode) {
-                        // Regular mode: subtract low-pass gravity from raw acceleration
-                        val dynX = accelX - lpGravityX
-                        val dynY = accelY - lpGravityY
-                        val dynZ = accelZ - lpGravityZ
+                        // Regular mode: unassisted raw acceleration (smoothed via low-pass) minus static calibration
+                        val dynX = lpGravityX - prefs.calibX
+                        val dynY = lpGravityY - prefs.calibY
+                        val dynZ = lpGravityZ - prefs.calibZ
 
                         val diffX = dynX / SensorManager.GRAVITY_EARTH
                         val diffY = dynY / SensorManager.GRAVITY_EARTH
@@ -78,7 +78,7 @@ class SensorManagerWrapper(context: Context) {
                             longitudinalG = diffY
                         }
 
-                        trySend(GForceData(lateralG, longitudinalG, dynX, dynY, dynZ))
+                        trySend(GForceData(lateralG, longitudinalG, lpGravityX, lpGravityY, lpGravityZ))
                     }
                 } else if (event.sensor.type == Sensor.TYPE_LINEAR_ACCELERATION) {
                     if (isTrueGMode) {
