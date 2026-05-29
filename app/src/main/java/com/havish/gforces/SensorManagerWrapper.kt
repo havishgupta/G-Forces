@@ -9,6 +9,8 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 data class GForceData(
     val lateralG: Float,
@@ -20,65 +22,119 @@ data class GForceData(
 
 class SensorManagerWrapper(context: Context) {
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    // Accelerometer is much better for G-Force apps as it measures real acceleration (movement) + gravity.
     private val accelerometer: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val rotationVector: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
     val prefs = PreferencesManager(context)
 
-    // Low-pass filter variables to smooth out jitter
-    private val alpha = 0.15f
-    private var gravityX = 0f
-    private var gravityY = 0f
-    private var gravityZ = 0f
+    // Low-pass filter variables
+    private val alpha = 0.85f // alpha for low-pass filter (gravity adapts slowly)
+    private var lpGravityX = 0f
+    private var lpGravityY = 0f
+    private var lpGravityZ = SensorManager.GRAVITY_EARTH // Default to 1G on Z
+
+    // Fused gravity vector
+    private var fusedGravityX = 0f
+    private var fusedGravityY = 0f
+    private var fusedGravityZ = SensorManager.GRAVITY_EARTH
+
+    // Latest orientation derived gravity
+    private var derivedGravX = 0f
+    private var derivedGravY = 0f
+    private var derivedGravZ = SensorManager.GRAVITY_EARTH
+
+    private var hasOrientation = false
 
     fun calibrate() {
-        prefs.calibX = gravityX
-        prefs.calibY = gravityY
-        prefs.calibZ = gravityZ
+        prefs.calibX = fusedGravityX
+        prefs.calibY = fusedGravityY
+        prefs.calibZ = fusedGravityZ
     }
 
     fun getGForceData(): Flow<GForceData> = callbackFlow {
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
-                event?.let {
-                    // Apply low-pass filter
-                    gravityX = alpha * it.values[0] + (1 - alpha) * gravityX
-                    gravityY = alpha * it.values[1] + (1 - alpha) * gravityY
-                    gravityZ = alpha * it.values[2] + (1 - alpha) * gravityZ
+                if (event == null) return
 
-                    val cx = prefs.calibX
-                    val cy = prefs.calibY
-                    val cz = prefs.calibZ
+                when (event.sensor.type) {
+                    Sensor.TYPE_ROTATION_VECTOR -> {
+                        val rotationMatrix = FloatArray(9)
+                        SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                        val orientation = FloatArray(3)
+                        SensorManager.getOrientation(rotationMatrix, orientation)
+                        
+                        // pitch (beta) and roll (gamma)
+                        val beta = orientation[1]
+                        val gamma = orientation[2]
+                        val G = SensorManager.GRAVITY_EARTH
 
-                    // Remove baseline gravity
-                    val diffX = (gravityX - cx) / SensorManager.GRAVITY_EARTH
-                    val diffY = (gravityY - cy) / SensorManager.GRAVITY_EARTH
-                    val diffZ = (gravityZ - cz) / SensorManager.GRAVITY_EARTH
-
-                    // Heuristic: Determine phone orientation based on calibration vector
-                    // If |cy| > |cz|, phone is mostly upright. Horizontal plane is X and Z.
-                    // If |cz| > |cy|, phone is mostly flat. Horizontal plane is X and Y.
-                    val lateralG: Float
-                    val longitudinalG: Float
-
-                    if (abs(cy) > abs(cz)) {
-                        // Phone is upright (portrait or landscape, but screen facing driver)
-                        lateralG = diffX
-                        longitudinalG = diffZ // Z is forward/backward
-                    } else {
-                        // Phone is flat on a surface (screen facing sky)
-                        lateralG = diffX
-                        longitudinalG = diffY // Y is forward/backward
+                        // Calculate gravity vector from orientation
+                        // Note: Android accelerometer reports +G on Z when face up.
+                        // We adjust the signs to match Android's coordinate system where the gravity vector
+                        // (as reported by accelerometer at rest) points up.
+                        derivedGravX = G * sin(gamma) * cos(beta)
+                        derivedGravY = -G * sin(beta)
+                        derivedGravZ = G * cos(gamma) * cos(beta)
+                        hasOrientation = true
                     }
+                    Sensor.TYPE_ACCELEROMETER -> {
+                        val accelX = event.values[0]
+                        val accelY = event.values[1]
+                        val accelZ = event.values[2]
 
-                    trySend(
-                        GForceData(
-                            lateralG = lateralG,
-                            longitudinalG = longitudinalG,
-                            rawX = gravityX,
-                            rawY = gravityY,
-                            rawZ = gravityZ
+                        // Method 1: Low-Pass Filter
+                        lpGravityX = alpha * lpGravityX + (1 - alpha) * accelX
+                        lpGravityY = alpha * lpGravityY + (1 - alpha) * accelY
+                        lpGravityZ = alpha * lpGravityZ + (1 - alpha) * accelZ
+
+                        // Method 2: Sensor Fusion (Blend)
+                        if (hasOrientation) {
+                            fusedGravityX = 0.95f * derivedGravX + 0.05f * lpGravityX
+                            fusedGravityY = 0.95f * derivedGravY + 0.05f * lpGravityY
+                            fusedGravityZ = 0.95f * derivedGravZ + 0.05f * lpGravityZ
+                        } else {
+                            fusedGravityX = lpGravityX
+                            fusedGravityY = lpGravityY
+                            fusedGravityZ = lpGravityZ
+                        }
+
+                        // Calculate dynamic acceleration by subtracting fused gravity
+                        val dynX = accelX - fusedGravityX
+                        val dynY = accelY - fusedGravityY
+                        val dynZ = accelZ - fusedGravityZ
+
+                        val cx = prefs.calibX
+                        val cy = prefs.calibY
+                        val cz = prefs.calibZ
+
+                        // Using calibration just to determine phone placement orientation, 
+                        // though we could also apply calibration offset to dynamic vector.
+                        val diffX = dynX / SensorManager.GRAVITY_EARTH
+                        val diffY = dynY / SensorManager.GRAVITY_EARTH
+                        val diffZ = dynZ / SensorManager.GRAVITY_EARTH
+
+                        val lateralG: Float
+                        val longitudinalG: Float
+
+                        if (abs(cy) > abs(cz)) {
+                            // Phone is upright
+                            lateralG = diffX
+                            longitudinalG = diffZ
+                        } else {
+                            // Phone is flat
+                            lateralG = diffX
+                            longitudinalG = diffY
+                        }
+
+                        trySend(
+                            GForceData(
+                                lateralG = lateralG,
+                                longitudinalG = longitudinalG,
+                                rawX = dynX, // Now exposing dynamic Gs instead of raw for visualization
+                                rawY = dynY,
+                                rawZ = dynZ
+                            )
                         )
-                    )
+                    }
                 }
             }
 
@@ -86,8 +142,10 @@ class SensorManagerWrapper(context: Context) {
         }
 
         if (accelerometer != null) {
-            // SENSOR_DELAY_GAME provides a very smooth ~50fps refresh rate
             sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+        }
+        if (rotationVector != null) {
+            sensorManager.registerListener(listener, rotationVector, SensorManager.SENSOR_DELAY_GAME)
         }
 
         awaitClose {
