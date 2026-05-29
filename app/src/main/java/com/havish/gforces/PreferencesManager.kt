@@ -14,6 +14,10 @@ class PreferencesManager(context: Context) {
         get() = prefs.getBoolean("debug_mode", false)
         set(value) = prefs.edit().putBoolean("debug_mode", value).apply()
 
+    var useTrueGForceMode: Boolean
+        get() = prefs.getBoolean("true_gforce_mode", true)
+        set(value) = prefs.edit().putBoolean("true_gforce_mode", value).apply()
+
     var calibX: Float
         get() = prefs.getFloat("calib_x", 0f)
         set(value) = prefs.edit().putFloat("calib_x", value).apply()

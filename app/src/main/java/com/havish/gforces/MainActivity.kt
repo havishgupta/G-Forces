@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
             // Read settings
             var maxG by remember { mutableFloatStateOf(sensorManagerWrapper.prefs.maxG) }
             var isDebugMode by remember { mutableStateOf(sensorManagerWrapper.prefs.isDebugMode) }
+            var useTrueGForceMode by remember { mutableStateOf(sensorManagerWrapper.prefs.useTrueGForceMode) }
 
             val gravityData by remember { sensorManagerWrapper.getGForceData() }.collectAsState(
                 initial = GForceData(0f, 0f, 0f, 0f, 0f)
@@ -106,6 +107,18 @@ class MainActivity : ComponentActivity() {
                                         label = { Text("${scale}G") }
                                     )
                                 }
+                            }
+                            Spacer(Modifier.height(16.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("True G-Force Mode")
+                                Spacer(Modifier.weight(1f))
+                                Switch(
+                                    checked = useTrueGForceMode,
+                                    onCheckedChange = {
+                                        useTrueGForceMode = it
+                                        sensorManagerWrapper.prefs.useTrueGForceMode = it
+                                    }
+                                )
                             }
                             Spacer(Modifier.height(16.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
